@@ -1,0 +1,18 @@
+{
+  "fusion_classes": ["CN", "EMCI", "LMCI", "MCI", "AD"],
+  "mri_classes": ["NonDemented", "VeryMildDemented", "MildDemented", "ModerateDemented"],
+  "pet_classes": ["CN", "EMCI", "LMCI", "MCI", "AD"],
+  "mri_to_fusion": [
+    [1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 1]
+  ],
+  "pet_to_fusion": [
+    [1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 1]
+  ]
+}
