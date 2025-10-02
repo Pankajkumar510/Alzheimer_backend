@@ -192,6 +192,26 @@ Response (abridged):
 ---
 
 ## Training (Optional)
+
+### Cognitive MLP quick start (uses cognitive_dataset)
+
+1) Ensure the dataset is present at one level up from the backend directory:
+   - ../cognitive_dataset/cognitive_train.csv
+   - ../cognitive_dataset/cognitive_val.csv
+   - ../cognitive_dataset/cognitive_features.json
+
+2) Train with the helper script:
+```pwsh
+python scripts/train_cognitive_from_dataset.py
+```
+This will create experiments/cognitive_YYYYMMDD-HHMMSS with:
+- best_model.pth
+- scaler.joblib
+- epoch metrics and results.json
+
+The API auto-detects this model and serves cognitive predictions.
+
+### Full training suite
 There are three models: MRI (ConvNeXt), PET (ViT), and Cognitive (MLP, optional). A late-fusion layer combines them to 5 classes (CN/EMCI/LMCI/MCI/AD).
 
 A) Data format
