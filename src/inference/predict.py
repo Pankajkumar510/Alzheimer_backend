@@ -122,11 +122,42 @@ class InferenceEngine:
             ckpt = torch.load(mri_weights, map_location=self.device)
             sd = ckpt["model_state"]
             nclasses = len(self.mri_class_to_idx) if self.mri_class_to_idx else _infer_num_classes_from_state_dict(sd) or 2
-            self.mri_model = create_mri_model(nclasses)
+            
+            # Detect ConvNext architecture from state dict
+            model_name = "convnext_base"  # default
+            if "stem.0.weight" in sd:
+                stem_channels = sd["stem.0.weight"].shape[0]
+                if stem_channels == 96:
+                    # Check stage 2 depth to distinguish tiny vs small
+                    stage2_depth = 0
+                    for i in range(30):
+                        if f"stages.2.blocks.{i}.gamma" in sd:
+                            stage2_depth += 1
+                        else:
+                            break
+                    if stage2_depth == 9:
+                        model_name = "convnext_tiny"
+                    else:
+                        model_name = "convnext_small"
+                elif stem_channels == 128:
+                    model_name = "convnext_base"
+                elif stem_channels == 192:
+                    model_name = "convnext_large"
+            
+            self.mri_model = create_mri_model(nclasses, model_name=model_name, pretrained=False)
             self.mri_model.load_state_dict(sd)  # type: ignore
             self.mri_model.to(self.device).eval()
             self.debug["mri"]["loaded"] = True
             self.debug["mri"]["nclasses"] = nclasses
+            self.debug["mri"]["model_name"] = model_name
+        elif self.mri_class_to_idx:
+            # Fallback demo: untrained head produces non-informative predictions but enables UI flow
+            nclasses = len(self.mri_class_to_idx)
+            self.mri_model = create_mri_model(nclasses, model_name="convnext_tiny", pretrained=False)
+            self.mri_model.to(self.device).eval()
+            self.debug["mri"]["loaded"] = True
+            self.debug["mri"]["nclasses"] = nclasses
+            self.debug["mri"]["mode"] = "untrained"
         if pet_weights and Path(pet_weights).exists():
             ckpt = torch.load(pet_weights, map_location=self.device)
             sd = ckpt["model_state"]
@@ -146,11 +177,20 @@ class InferenceEngine:
                 elif embed_dim <= 768:
                     model_name = "vit_base_patch16_224"
             nclasses = len(self.pet_class_to_idx) if self.pet_class_to_idx else _infer_num_classes_from_state_dict(sd) or 2
-            self.pet_model = create_vit_model(nclasses, model_name=model_name)
+            self.pet_model = create_vit_model(nclasses, model_name=model_name, pretrained=False)
             self.pet_model.load_state_dict(sd)  # type: ignore
             self.pet_model.to(self.device).eval()
             self.debug["pet"]["loaded"] = True
             self.debug["pet"]["nclasses"] = nclasses
+        elif self.pet_class_to_idx:
+            # Fallback demo: untrained head enables UI flow without weights
+            model_name = "vit_small_patch16_224"
+            nclasses = len(self.pet_class_to_idx)
+            self.pet_model = create_vit_model(nclasses, model_name=model_name, pretrained=False)
+            self.pet_model.to(self.device).eval()
+            self.debug["pet"]["loaded"] = True
+            self.debug["pet"]["nclasses"] = nclasses
+            self.debug["pet"]["mode"] = "untrained"
         if cognitive_dir:
             cog_w = Path(cognitive_dir) / "best_model.pth"
             scaler_p = Path(cognitive_dir) / "scaler.joblib"
@@ -251,9 +291,9 @@ class InferenceEngine:
                     Path(save_explain_dir).mkdir(parents=True, exist_ok=True)
                     cv2.imwrite(str(out_p), heat_u8)
                     outputs["explainability"]["pet_heatmap"] = str(out_p).replace("\\", "/")
-        if cognitive:
+        if cognitive is not None:
             if self.cog_model and self.cog_scaler is not None and self.cog_features:
-                X = np.array([cognitive.get(k, 0.0) for k in self.cog_features], dtype=np.float32)
+                X = np.array([cognitive.get(k, 0.0) for k in self.cog_features], dtype=np.float32) if isinstance(cognitive, dict) else np.zeros((len(self.cog_features),), dtype=np.float32)
                 X = (X - self.cog_scaler.mean_) / np.sqrt(self.cog_scaler.var_ + 1e-8)
                 xt = torch.tensor(X, dtype=torch.float32).unsqueeze(0).to(self.device)
                 with torch.no_grad():
