@@ -196,13 +196,26 @@ class InferenceEngine:
             scaler_p = Path(cognitive_dir) / "scaler.joblib"
             if cog_w.exists() and scaler_p.exists():
                 ckpt = torch.load(str(cog_w), map_location=self.device)
-                self.cog_model = CognitiveMLP(input_dim=len(ckpt["features"]), num_classes=len(self.mri_class_to_idx) or len(self.pet_class_to_idx) or 2)
+                # Infer num_classes from checkpoint state_dict if not explicitly stored
+                num_cog_classes = ckpt.get("num_classes")
+                if num_cog_classes is None:
+                    # Try to infer from the final layer bias shape
+                    for key in ["net.6.bias", "fc.bias", "classifier.bias"]:
+                        if key in ckpt["model_state"]:
+                            num_cog_classes = int(ckpt["model_state"][key].shape[0])
+                            break
+                if num_cog_classes is None:
+                    num_cog_classes = 2  # Default fallback
+                
+                self.cog_model = CognitiveMLP(input_dim=len(ckpt["features"]), num_classes=num_cog_classes)
                 self.cog_model.load_state_dict(ckpt["model_state"])  # type: ignore
                 self.cog_model.to(self.device).eval()
                 self.cog_features = ckpt.get("features", [])
                 self.cog_scaler = load_scaler(str(scaler_p))
+                self.cog_num_classes = num_cog_classes
                 self.debug["cognitive"]["loaded"] = True
                 self.debug["cognitive"]["mode"] = "mlp"
+                self.debug["cognitive"]["num_classes"] = num_cog_classes
 
         # Determine if direct fusion is possible (identical class sets)
         self.fusion_enabled_direct = self.mri_class_to_idx and self.pet_class_to_idx and (
@@ -299,12 +312,54 @@ class InferenceEngine:
                 with torch.no_grad():
                     logits = self.cog_model(xt)
                     probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-                # Treat cognitive probs as 5-class fusion space if lengths match, else leave as-is
-                outputs["predictions"]["cognitive"] = {
-                    "label": int(np.argmax(probs)),
-                    "probabilities": probs.tolist(),
-                }
-                probs_list.append(probs)
+                
+                # If binary model (2 classes), map to fusion space if available
+                if len(probs) == 2 and self.fusion and len(self.fusion.get("fusion_classes", [])) > 2:
+                    # Binary model: probs[0] = healthy/CN, probs[1] = impaired/AD
+                    # Map to 5-class fusion space: [CN, EMCI, LMCI, MCI, AD]
+                    # Use the impairment probability to create a soft distribution
+                    impairment = probs[1]  # Probability of being impaired
+                    # Create a distribution that shifts toward AD as impairment increases
+                    fusion_probs = np.zeros(len(self.fusion["fusion_classes"]), dtype=np.float32)
+                    if impairment < 0.3:
+                        # Low impairment: mostly CN
+                        fusion_probs[0] = 0.7 + (0.3 - impairment) * 0.5  # CN
+                        fusion_probs[1] = 0.2  # EMCI
+                        fusion_probs[2] = 0.1  # LMCI
+                    elif impairment < 0.5:
+                        # Mild impairment: EMCI/LMCI range
+                        fusion_probs[0] = 0.2  # CN
+                        fusion_probs[1] = 0.5  # EMCI
+                        fusion_probs[2] = 0.3  # LMCI
+                    elif impairment < 0.7:
+                        # Moderate impairment: LMCI/MCI range
+                        fusion_probs[1] = 0.2  # EMCI
+                        fusion_probs[2] = 0.4  # LMCI
+                        fusion_probs[3] = 0.4  # MCI
+                    else:
+                        # High impairment: MCI/AD range
+                        fusion_probs[2] = 0.1  # LMCI
+                        fusion_probs[3] = 0.3  # MCI
+                        fusion_probs[4] = 0.6  # AD
+                    
+                    # Normalize to ensure sum = 1
+                    fusion_probs = fusion_probs / (fusion_probs.sum() + 1e-8)
+                    
+                    # Store both binary and fusion predictions
+                    outputs["predictions"]["cognitive"] = {
+                        "label": int(np.argmax(fusion_probs)),
+                        "probabilities": fusion_probs.tolist(),
+                        "binary_probs": probs.tolist(),
+                        "impairment_score": float(impairment),
+                    }
+                    probs_list.append(fusion_probs)
+                else:
+                    # Already in fusion space or no fusion mapping available
+                    outputs["predictions"]["cognitive"] = {
+                        "label": int(np.argmax(probs)),
+                        "probabilities": probs.tolist(),
+                    }
+                    probs_list.append(probs)
                 weights.append(0.5)
                 self.debug["cognitive"]["mode"] = self.debug["cognitive"].get("mode") or "mlp"
             else:

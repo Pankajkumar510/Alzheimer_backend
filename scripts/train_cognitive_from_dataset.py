@@ -5,6 +5,7 @@ Run: python scripts/train_cognitive_from_dataset.py
 """
 
 import subprocess
+import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
@@ -30,6 +31,11 @@ cmd = [
     "--lr", "1e-3",
     "--out-dir", str(EXPERIMENTS)
 ]
+
+# Set PYTHONPATH to include the backend directory
+env = os.environ.copy()
+env['PYTHONPATH'] = str(BACKEND)
+
 print("Running:", " ".join(cmd))
-subprocess.check_call(cmd)
+subprocess.check_call(cmd, env=env)
 print("Done. Cognitive model saved under:", EXPERIMENTS)
