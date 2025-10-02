@@ -387,10 +387,64 @@ class InferenceEngine:
                     fused = stack.mean(axis=0) if fusion != "weighted" else stack.mean(axis=0)
                     fused = fused / (fused.sum() + 1e-8)
                     fid = int(np.argmax(fused))
+                    
+                    # Calculate combined confidence as average of individual MRI and PET max confidences
+                    individual_confidences = []
+                    if "mri" in outputs["predictions"]:
+                        mri_probs_raw = np.array(outputs["predictions"]["mri"]["probabilities"])
+                        individual_confidences.append(float(mri_probs_raw.max()))
+                    if "pet" in outputs["predictions"]:
+                        pet_probs_raw = np.array(outputs["predictions"]["pet"]["probabilities"])
+                        individual_confidences.append(float(pet_probs_raw.max()))
+                    
+                    # Use average of individual confidences instead of fused probability max
+                    # If no MRI/PET available, fall back to original fused confidence
+                    if len(individual_confidences) >= 2:
+                        # Both MRI and PET available - use average
+                        combined_confidence = np.mean(individual_confidences)
+                    elif len(individual_confidences) == 1:
+                        # Only one modality available - use its confidence directly
+                        combined_confidence = individual_confidences[0]
+                    else:
+                        # No MRI/PET available - use original fused confidence
+                        combined_confidence = float(fused.max())
+                    
+                    # Add debug info to output
+                    outputs["debug"]["fusion_calculation"] = {
+                        "individual_confidences": individual_confidences,
+                        "combined_confidence": combined_confidence,
+                        "original_fused_max": float(fused.max()),
+                        "fusion_method": "average_of_individuals" if len(individual_confidences) >= 2 else "single_modality" if len(individual_confidences) == 1 else "fused_max",
+                        "modalities_used": len(individual_confidences),
+                        "mri_available": "mri" in outputs["predictions"],
+                        "pet_available": "pet" in outputs["predictions"]
+                    }
+                    
+                    # Adjust the fused probabilities to reflect the combined confidence
+                    # Keep the predicted class the same but scale the max probability to match combined confidence
+                    fused_adjusted = fused.copy()
+                    if combined_confidence > 0:
+                        # Scale the winning class probability to match the combined confidence
+                        fused_adjusted[fid] = combined_confidence
+                        # Redistribute the remaining probability among other classes
+                        remaining_prob = 1.0 - combined_confidence
+                        other_indices = [i for i in range(len(fused_adjusted)) if i != fid]
+                        if other_indices and remaining_prob > 0:
+                            # Distribute remaining probability proportionally among other classes
+                            other_probs_sum = sum(fused[i] for i in other_indices)
+                            if other_probs_sum > 0:
+                                for i in other_indices:
+                                    fused_adjusted[i] = (fused[i] / other_probs_sum) * remaining_prob
+                            else:
+                                # If all other probs are 0, distribute equally
+                                for i in other_indices:
+                                    fused_adjusted[i] = remaining_prob / len(other_indices)
+                    
                     outputs["predictions"]["fusion"] = {
                         "label": self.fusion["idx_to_fusion"][fid],
-                        "probabilities": fused.tolist(),
+                        "probabilities": fused_adjusted.tolist(),
                     }
+                    outputs["debug"]["fusion_path_taken"] = "mapping_path"
             elif self.fusion_enabled_direct and len(set(map(len, probs_list))) == 1:
                 if fusion == "weighted":
                     fused = weighted_fusion(probs_list, weights)

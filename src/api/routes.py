@@ -151,6 +151,21 @@ async def predict(
     pet_file: Optional[UploadFile] = File(None),
     cognitive: Optional[str] = Form(None),
 ):
+    # Add logging for debugging frontend issues
+    print(f"\n=== PREDICT REQUEST RECEIVED ===")
+    print(f"Patient ID: {patient_id}")
+    print(f"MRI file: {mri_file.filename if mri_file else None} (size: {mri_file.size if mri_file else 0} bytes)")
+    print(f"PET file: {pet_file.filename if pet_file else None} (size: {pet_file.size if pet_file else 0} bytes)")
+    print(f"Cognitive data: {cognitive[:100]}{'...' if cognitive and len(cognitive) > 100 else ''}")
+    print(f"Files will be processed: MRI={'✓' if mri_file else '✗'}, PET={'✓' if pet_file else '✗'}")
+    
+    # Check for duplicate files being uploaded as different types
+    if mri_file and pet_file and mri_file.filename == pet_file.filename:
+        print(f"⚠️  WARNING: Same file uploaded as both MRI and PET: {mri_file.filename}")
+    elif mri_file and not pet_file:
+        print(f"ℹ️  INFO: Only MRI file uploaded")
+    elif pet_file and not mri_file:
+        print(f"ℹ️  INFO: Only PET file uploaded")
     # Parse cognitive JSON early so it is available even on early-return paths
     def _parse_cognitive(val: Optional[str]) -> Optional[dict]:
         if val is None:
@@ -311,7 +326,17 @@ async def predict(
             },
         }
 
-    return {"status": "ok", "result": result}
+    response_data = {"status": "ok", "result": result}
+    print(f"=== PREDICT RESPONSE SENT ===")
+    print(f"Status: {response_data['status']}")
+    if 'predictions' in result:
+        print(f"Predictions sent: {list(result['predictions'].keys())}")
+        for k, v in result['predictions'].items():
+            if 'probabilities' in v:
+                conf = max(v['probabilities']) * 100
+                print(f"  {k}: {v.get('label', 'N/A')} ({conf:.1f}%)")
+    print(f"================================\n")
+    return response_data
 
 
 @router.get("/report/{patient_id}")
