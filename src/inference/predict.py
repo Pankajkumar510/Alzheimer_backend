@@ -476,31 +476,14 @@ class InferenceEngine:
                         "pet_available": bool("pet" in outputs["predictions"]) 
                     }
                     
-                    # Adjust the fused probabilities to reflect the combined confidence
-                    # Keep the predicted class the same but scale the max probability to match combined confidence
-                    fused_adjusted = fused.copy()
-                    if combined_confidence > 0:
-                        # Scale the winning class probability to match the combined confidence
-                        fused_adjusted[fid] = combined_confidence
-                        # Redistribute the remaining probability among other classes
-                        remaining_prob = 1.0 - combined_confidence
-                        other_indices = [i for i in range(len(fused_adjusted)) if i != fid]
-                        if other_indices and remaining_prob > 0:
-                            # Distribute remaining probability proportionally among other classes
-                            other_probs_sum = sum(fused[i] for i in other_indices)
-                            if other_probs_sum > 0:
-                                for i in other_indices:
-                                    fused_adjusted[i] = (fused[i] / other_probs_sum) * remaining_prob
-                            else:
-                                # If all other probs are 0, distribute equally
-                                for i in other_indices:
-                                    fused_adjusted[i] = remaining_prob / len(other_indices)
-                    
+                    # Use the fused probabilities as-is for confidence (max probability)
+                    # This preserves high-confidence cases (e.g., >0.9) if the fused distribution is decisive.
                     outputs["predictions"]["fusion"] = {
                         "label": self.fusion["idx_to_fusion"][fid],
-                        "probabilities": fused_adjusted.tolist(),
+                        "probabilities": fused.tolist(),
                     }
                     outputs["debug"]["fusion_path_taken"] = "mapping_path"
+                    outputs["debug"]["fusion_confidence_note"] = "confidence taken as max(fused_probs) without downscaling"
             elif self.fusion_enabled_direct and len(set(map(len, probs_list))) == 1:
                 if fusion == "weighted":
                     fused = weighted_fusion(probs_list, weights)
