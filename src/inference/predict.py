@@ -232,6 +232,7 @@ class InferenceEngine:
             logits = model(x)
             probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
         return probs
+    
 
     def _explain_mri(self, image_path: str) -> Optional[np.ndarray]:
         if self.mri_model is None:
@@ -456,23 +457,23 @@ class InferenceEngine:
                     # If no MRI/PET available, fall back to original fused confidence
                     if len(individual_confidences) >= 2:
                         # Both MRI and PET available - use average
-                        combined_confidence = np.mean(individual_confidences)
+                        combined_confidence = float(np.mean(individual_confidences))
                     elif len(individual_confidences) == 1:
                         # Only one modality available - use its confidence directly
-                        combined_confidence = individual_confidences[0]
+                        combined_confidence = float(individual_confidences[0])
                     else:
                         # No MRI/PET available - use original fused confidence
                         combined_confidence = float(fused.max())
                     
-                    # Add debug info to output
+                    # Add debug info to output (cast to native Python types)
                     outputs["debug"]["fusion_calculation"] = {
-                        "individual_confidences": individual_confidences,
-                        "combined_confidence": combined_confidence,
+                        "individual_confidences": [float(c) for c in individual_confidences],
+                        "combined_confidence": float(combined_confidence),
                         "original_fused_max": float(fused.max()),
                         "fusion_method": "average_of_individuals" if len(individual_confidences) >= 2 else "single_modality" if len(individual_confidences) == 1 else "fused_max",
-                        "modalities_used": len(individual_confidences),
-                        "mri_available": "mri" in outputs["predictions"],
-                        "pet_available": "pet" in outputs["predictions"]
+                        "modalities_used": int(len(individual_confidences)),
+                        "mri_available": bool("mri" in outputs["predictions"]),
+                        "pet_available": bool("pet" in outputs["predictions"]) 
                     }
                     
                     # Adjust the fused probabilities to reflect the combined confidence
